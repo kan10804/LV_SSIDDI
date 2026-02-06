@@ -90,7 +90,8 @@ def do_compute(batch, device, training=True):
 
 def do_compute_metrics(probas_pred, target):
 
-    pred = (probas_pred >= 0.5).astype(np.int)
+    pred = (probas_pred >= 0.5).astype(int)
+
 
     acc = metrics.accuracy_score(target, pred)
     auc_roc = metrics.roc_auc_score(target, probas_pred)
