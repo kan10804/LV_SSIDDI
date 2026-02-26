@@ -45,11 +45,30 @@ print(args)
 ############################################################
 
 ###### Dataset
-df_ddi_train = pd.read_csv('data/ddi_training.csv')
-df_ddi_val = pd.read_csv('data/ddi_validation.csv')
-df_ddi_test = pd.read_csv('data/ddi_test.csv')
+import pandas as pd
+
+def load_ddi_file(path):
+    df = pd.read_csv(path)
+
+    # Lấy đúng cột chứa chuỗi d1,d2,type,Neg samples
+    df = df['d1,d2,type,Neg samples'].str.split(',', expand=True)
+
+    df.columns = ['d1', 'd2', 'type', 'Neg samples']
+
+    # Convert type sang int để tránh lỗi KeyError sau này
+    df['type'] = df['type'].astype(int)
+
+    return df
 
 
+df_ddi_train = load_ddi_file('/content/drive/MyDrive/data/train.csv')
+df_ddi_val   = load_ddi_file('/content/drive/MyDrive/data/val.csv')
+df_ddi_test  = load_ddi_file('/content/drive/MyDrive/data/test.csv')
+
+print("Max relation id:", df_ddi_train['type'].max())
+print("Min relation id:", df_ddi_train['type'].min())
+print("Number unique relations:", df_ddi_train['type'].nunique())
+rel_total = df_ddi_train['type'].max() + 1
 train_tup = [(h, t, r) for h, t, r in zip(df_ddi_train['d1'], df_ddi_train['d2'], df_ddi_train['type'])]
 val_tup = [(h, t, r) for h, t, r in zip(df_ddi_val['d1'], df_ddi_val['d2'], df_ddi_val['type'])]
 test_tup = [(h, t, r) for h, t, r in zip(df_ddi_test['d1'], df_ddi_test['d2'], df_ddi_test['type'])]
