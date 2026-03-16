@@ -36,6 +36,7 @@ class SSI_DDI(nn.Module):
             in_features = head_out_feats * n_heads
         
         self.co_attention = CoAttentionLayer(self.kge_dim)
+        #self.co_attention = MultiCoAttentionLayer(self.kge_dim, n_heads=4)
         self.KGE = RESCAL(self.rel_total, self.kge_dim)
 
     def forward(self, triples):
