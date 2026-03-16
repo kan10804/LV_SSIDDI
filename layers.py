@@ -32,7 +32,60 @@ class CoAttentionLayer(nn.Module):
 
         return attentions
 
+# class MultiCoAttentionLayer(nn.Module):
 
+#     def __init__(self, n_features, n_heads=4):
+#         super().__init__()
+
+#         self.n_features = n_features
+#         self.n_heads = n_heads
+#         hidden_dim = n_features // 2
+
+#         self.w_q = nn.Parameter(torch.zeros(n_heads, n_features, hidden_dim))
+#         self.w_k = nn.Parameter(torch.zeros(n_heads, n_features, hidden_dim))
+#         self.bias = nn.Parameter(torch.zeros(n_heads, hidden_dim))
+#         self.a = nn.Parameter(torch.zeros(n_heads, hidden_dim))
+
+#         self.alpha = nn.Parameter(torch.ones(n_heads))
+
+#         nn.init.xavier_uniform_(self.w_q)
+#         nn.init.xavier_uniform_(self.w_k)
+#         nn.init.xavier_uniform_(self.bias.unsqueeze(-1))
+#         nn.init.xavier_uniform_(self.a.unsqueeze(-1))
+
+#     def forward(self, receiver, attendant):
+
+#         attn_heads = []
+
+#         for i in range(self.n_heads):
+
+#             keys = receiver @ self.w_k[i]
+#             queries = attendant @ self.w_q[i]
+
+#             bias = self.bias[i].view(1,1,1,-1)
+
+#             e_activations = (
+#                 queries.unsqueeze(-3)
+#                 + keys.unsqueeze(-2)
+#                 + bias
+#             )
+
+#             e_scores = torch.tanh(e_activations) @ self.a[i]
+
+#             attn_heads.append(e_scores)
+
+#         attn_heads = torch.stack(attn_heads)
+
+#         weights = torch.softmax(self.alpha, dim=0)
+
+#         attentions = torch.zeros_like(attn_heads[0])
+
+#         for i in range(self.n_heads):
+#             attentions += weights[i] * attn_heads[i]
+
+#         attentions = torch.softmax(attentions, dim=-1)
+
+#         return attentions
 class RESCAL(nn.Module):
     def __init__(self, n_rels, n_features):
         super().__init__()
