@@ -45,9 +45,9 @@ print(args)
 ############################################################
 
 ###### Dataset
-df_ddi_train = pd.read_csv('data/ddi_training.csv')
-df_ddi_val = pd.read_csv('data/ddi_validation.csv')
-df_ddi_test = pd.read_csv('data/ddi_test.csv')
+df_ddi_train = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_training.csv')
+df_ddi_val = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_validation.csv')
+df_ddi_test = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_test.csv')
 
 
 train_tup = [(h, t, r) for h, t, r in zip(df_ddi_train['d1'], df_ddi_train['d2'], df_ddi_train['type'])]
