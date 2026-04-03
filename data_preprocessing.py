@@ -114,7 +114,7 @@ TOTAL_ATOM_FEATS = (next(iter(MOL_EDGE_LIST_FEAT_MTX.values()))[1].shape[-1])
 
 
 ##### DDI statistics and counting #######
-df_all_pos_ddi = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_clean.csv')
+df_all_pos_ddi = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddis.csv')
 all_pos_tup = [(h, t, r) for h, t, r in zip(df_all_pos_ddi['d1'], df_all_pos_ddi['d2'], df_all_pos_ddi['type'])]
 
 
