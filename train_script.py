@@ -1,5 +1,7 @@
+import os
 import time
 import random
+import argparse
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -19,27 +21,35 @@ def set_seed(seed=42):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+# ================= CLI =================
+def get_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--n_atom_feats", type=int, default=TOTAL_ATOM_FEATS)
+    parser.add_argument("--n_atom_hid", type=int, default=128)
+    parser.add_argument("--rel_total", type=int, default=86)
+    parser.add_argument("--kge_dim", type=int, default=64)
+
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--n_epochs", type=int, default=100)
+    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--weight_decay", type=float, default=5e-4)
+    parser.add_argument("--neg_samples", type=int, default=2)
+    parser.add_argument("--patience", type=int, default=10)
+
+    parser.add_argument("--save_dir", type=str, default="/content/outputs")
+
+    return parser.parse_args()
+
+args = get_args()
 set_seed(42)
-
-# ================= PARAM =================
-class Args:
-    n_atom_feats = TOTAL_ATOM_FEATS
-    n_atom_hid = 128
-    rel_total = 86
-    lr = 3e-4
-    n_epochs = 100
-    kge_dim = 64
-    batch_size = 256
-    weight_decay = 5e-4
-    neg_samples = 2
-    patience = 10
-
-args = Args()
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print("Device:", device)
 
-# Load data
+os.makedirs(args.save_dir, exist_ok=True)
+
+# ================= LOAD DATA (FIXED PATH) =================
 train_df = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_training.csv')
 val_df   = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_validation.csv')
 test_df  = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_test.csv')
@@ -58,7 +68,7 @@ test_loader  = DrugDataLoader(test_data, batch_size=args.batch_size * 2)
 
 print(f"Train: {len(train_data)} | Val: {len(val_data)} | Test: {len(test_data)}")
 
-# model and optimizer
+# ================= MODEL =================
 model = models.SSI_DDI(
     args.n_atom_feats,
     args.n_atom_hid,
@@ -79,7 +89,7 @@ scheduler = optim.lr_scheduler.LambdaLR(
     lambda epoch: 0.96 ** epoch
 )
 
-# balance
+# ================= LOSS =================
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2.0, alpha=0.3):
         super().__init__()
@@ -132,7 +142,7 @@ def do_compute(batch):
 
     return p_score, n_score, probas, labels
 
-# train state
+# ================= TRAIN =================
 best_auc = 0
 counter = 0
 
@@ -155,10 +165,7 @@ def train():
 
             optimizer.zero_grad()
             loss.backward()
-
-      
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-
             optimizer.step()
 
             train_loss += loss.item()
@@ -195,23 +202,20 @@ def train():
 
         val_auc = val_metrics[1]
 
-        # save best model
         if val_auc > best_auc:
             best_auc = val_auc
             counter = 0
 
             torch.save({
                 "model": model.state_dict(),
-                "optimizer": optimizer.state_dict(),
                 "epoch": epoch,
                 "auc": val_auc
-            }, "/content/best_model.pth")
+            }, os.path.join(args.save_dir, "best_model.pth"))
 
             print("Save best model!")
         else:
             counter += 1
 
-        #   early stopping if epochs=10 without improvement
         if counter >= args.patience:
             print("Early stopping!")
             break
@@ -221,12 +225,11 @@ def train():
         print(f"\nEpoch {epoch} | Time {time.time()-start:.2f}s")
         print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
         print(f"Train AUC: {train_metrics[1]:.4f} | Val AUC: {val_metrics[1]:.4f}")
-        print(f"Train AUPR: {train_metrics[2]:.4f} | Val AUPR: {val_metrics[2]:.4f}")
         print("-"*50)
 
-
+# ================= TEST =================
 def test():
-    checkpoint = torch.load("/content/best_model.pth")
+    checkpoint = torch.load(os.path.join(args.save_dir, "best_model.pth"))
 
     model.load_state_dict(checkpoint["model"])
     print(f"Loaded best model (Epoch {checkpoint['epoch']}, AUC={checkpoint['auc']:.4f})")
@@ -247,10 +250,14 @@ def test():
     acc, auc, auprc, f1 = compute_metrics(probas, labels)
 
     print("\n===== TEST RESULTS =====")
-    print(f"ACC   : {acc:.4f}")
     print(f"AUC   : {auc:.4f}")
     print(f"AUPRC : {auprc:.4f}")
     print(f"F1    : {f1:.4f}")
+    print(f"ACC   : {acc:.4f}")
 
+    np.save(os.path.join(args.save_dir, "probas.npy"), probas)
+    np.save(os.path.join(args.save_dir, "labels.npy"), labels)
+
+# ================= RUN =================
 train()
 test()
