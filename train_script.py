@@ -257,7 +257,7 @@ def test():
         "prob": probas
     })
 
-    df.to_csv("/content/test_predictions.csv", index=False)
+    df.to_csv("/content/drive/MyDrive/data_clean/test_predictions.csv", index=False)
 
     # save metrics
     metrics_df = pd.DataFrame([{
