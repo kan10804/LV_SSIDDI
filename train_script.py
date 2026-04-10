@@ -267,7 +267,7 @@ def test():
         "F1": f1
     }])
 
-    metrics_df.to_csv("/content/test_metrics.csv", index=False)
+    metrics_df.to_csv("/content/drive/MyDrive/data_clean/test_metrics.csv", index=False)
 
     print("Saved: test_predictions.csv & test_metrics.csv")
 train()
