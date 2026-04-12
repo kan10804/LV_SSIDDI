@@ -40,9 +40,9 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print("Device:", device)
 
 # Load data
-train_df = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/twoside_ddi_training.csv')
-val_df   = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/twoside_ddi_validation.csv')
-test_df  = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/twoside_ddi_test.csv')
+train_df = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/ddi_training.csv')
+val_df   = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/ddi_validation.csv')
+test_df  = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/ddi_test.csv')
 
 train_tup = list(zip(train_df.d1, train_df.d2, train_df.type))
 val_tup   = list(zip(val_df.d1, val_df.d2, val_df.type))
