@@ -1,193 +1,274 @@
+import time
+import random
+import numpy as np
+import pandas as pd
 from datetime import datetime
-import time 
-import argparse
 
 import torch
 from torch import optim
+import torch.nn as nn
 from sklearn import metrics
-import pandas as pd
-import numpy as np
 
 import models
-import custom_loss
 from data_preprocessing import DrugDataset, DrugDataLoader, TOTAL_ATOM_FEATS
 
-######################### Parameters ######################
-parser = argparse.ArgumentParser()
-parser.add_argument('--n_atom_feats', type=int, default=TOTAL_ATOM_FEATS, help='num of input features')
-parser.add_argument('--n_atom_hid', type=int, default=64, help='num of hidden features')
-parser.add_argument('--rel_total', type=int, default=86, help='num of interaction types')
-parser.add_argument('--lr', type=float, default=1e-2, help='learning rate')
-parser.add_argument('--n_epochs', type=int, default=300, help='num of epochs')
-parser.add_argument('--kge_dim', type=int, default=64, help='dimension of interaction matrix')
-parser.add_argument('--batch_size', type=int, default=1024, help='batch size')
+# ================= SEED =================
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
-parser.add_argument('--weight_decay', type=float, default=5e-4)
-parser.add_argument('--neg_samples', type=int, default=1)
-parser.add_argument('--data_size_ratio', type=int, default=1)
-parser.add_argument('--use_cuda', type=bool, default=True, choices=[0, 1])
+set_seed(42)
 
+# ================= PARAM =================
+class Args:
+    n_atom_feats = TOTAL_ATOM_FEATS
+    n_atom_hid = 128
+    rel_total = 86
+    lr = 3e-4
+    n_epochs = 100
+    kge_dim = 64
+    batch_size = 256
+    weight_decay = 5e-4
+    neg_samples = 2
+    patience = 10
 
-args = parser.parse_args()
-n_atom_feats = args.n_atom_feats
-n_atom_hid = args.n_atom_hid
-rel_total = args.rel_total
-lr = args.lr
-n_epochs = args.n_epochs
-kge_dim = args.kge_dim
-batch_size = args.batch_size
+args = Args()
 
-weight_decay = args.weight_decay
-neg_samples = args.neg_samples
-data_size_ratio = args.data_size_ratio
-device = 'cuda' if torch.cuda.is_available() and args.use_cuda else 'cpu'
-print(args)
-############################################################
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print("Device:", device)
 
-###### Dataset
-import pandas as pd
+# Load data
+train_df = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_training.csv')
+val_df   = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_validation.csv')
+test_df  = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_test.csv')
 
-def load_ddi_file(path):
-    df = pd.read_csv(path)
+train_tup = list(zip(train_df.d1, train_df.d2, train_df.type))
+val_tup   = list(zip(val_df.d1, val_df.d2, val_df.type))
+test_tup  = list(zip(test_df.d1, test_df.d2, test_df.type))
 
-    # Lấy đúng cột chứa chuỗi d1,d2,type,Neg samples
-    df = df['d1,d2,type,Neg samples'].str.split(',', expand=True)
+train_data = DrugDataset(train_tup, neg_ent=args.neg_samples)
+val_data   = DrugDataset(val_tup, disjoint_split=False)
+test_data  = DrugDataset(test_tup, disjoint_split=False)
 
-    df.columns = ['d1', 'd2', 'type', 'Neg samples']
+train_loader = DrugDataLoader(train_data, batch_size=args.batch_size, shuffle=True)
+val_loader   = DrugDataLoader(val_data, batch_size=args.batch_size * 2)
+test_loader  = DrugDataLoader(test_data, batch_size=args.batch_size * 2)
 
-    # Convert type sang int để tránh lỗi KeyError sau này
-    df['type'] = df['type'].astype(int)
+print(f"Train: {len(train_data)} | Val: {len(val_data)} | Test: {len(test_data)}")
 
-    return df
+# model and optimizer
+model = models.SSI_DDI(
+    args.n_atom_feats,
+    args.n_atom_hid,
+    args.kge_dim,
+    args.rel_total,
+    heads_out_feat_params=[32, 32, 32, 32],
+    blocks_params=[2, 2, 2, 2]
+).to(device)
 
+optimizer = optim.Adam(
+    model.parameters(),
+    lr=args.lr,
+    weight_decay=args.weight_decay
+)
 
-df_ddi_train = load_ddi_file('/content/drive/MyDrive/data/train.csv')
-df_ddi_val   = load_ddi_file('/content/drive/MyDrive/data/val.csv')
-df_ddi_test  = load_ddi_file('/content/drive/MyDrive/data/test.csv')
+scheduler = optim.lr_scheduler.LambdaLR(
+    optimizer,
+    lambda epoch: 0.96 ** epoch
+)
 
-print("Max relation id:", df_ddi_train['type'].max())
-print("Min relation id:", df_ddi_train['type'].min())
-print("Number unique relations:", df_ddi_train['type'].nunique())
-rel_total = df_ddi_train['type'].max() + 1
-train_tup = [(h, t, r) for h, t, r in zip(df_ddi_train['d1'], df_ddi_train['d2'], df_ddi_train['type'])]
-val_tup = [(h, t, r) for h, t, r in zip(df_ddi_val['d1'], df_ddi_val['d2'], df_ddi_val['type'])]
-test_tup = [(h, t, r) for h, t, r in zip(df_ddi_test['d1'], df_ddi_test['d2'], df_ddi_test['type'])]
+# balance
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2.0, alpha=0.3):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
 
-train_data = DrugDataset(train_tup, ratio=data_size_ratio, neg_ent=neg_samples)
-val_data = DrugDataset(val_tup, ratio=data_size_ratio, disjoint_split=False)
-test_data = DrugDataset(test_tup, disjoint_split=False)
+    def forward(self, p_score, n_score):
+        p_prob = torch.sigmoid(p_score)
+        n_prob = torch.sigmoid(n_score)
 
-print(f"Training with {len(train_data)} samples, validating with {len(val_data)}, and testing with {len(test_data)}")
+        p_loss = -self.alpha * (1 - p_prob) ** self.gamma * torch.log(p_prob + 1e-8)
+        n_loss = -(1 - self.alpha) * (n_prob ** self.gamma) * torch.log(1 - n_prob + 1e-8)
 
-train_data_loader = DrugDataLoader(train_data, batch_size=batch_size, shuffle=True)
-val_data_loader = DrugDataLoader(val_data, batch_size=batch_size *3)
-test_data_loader = DrugDataLoader(test_data, batch_size=batch_size *3)
+        return p_loss.mean() + n_loss.mean()
 
-def do_compute(batch, device, training=True):
-        '''
-            *batch: (pos_tri, neg_tri)
-            *pos/neg_tri: (batch_h, batch_t, batch_r)
-        '''
-        probas_pred, ground_truth = [], []
-        pos_tri, neg_tri = batch
-        
-        pos_tri = [tensor.to(device=device) for tensor in pos_tri]
-        p_score = model(pos_tri)
-        probas_pred.append(torch.sigmoid(p_score.detach()).cpu())
-        ground_truth.append(np.ones(len(p_score)))
+loss_fn = FocalLoss()
 
-        neg_tri = [tensor.to(device=device) for tensor in neg_tri]
-        n_score = model(neg_tri)
-        probas_pred.append(torch.sigmoid(n_score.detach()).cpu())
-        ground_truth.append(np.zeros(len(n_score)))
+# ================= UTIL =================
+def compute_metrics(probas, labels):
+    pred = (probas >= 0.5).astype(int)
 
-        probas_pred = np.concatenate(probas_pred)
-        ground_truth = np.concatenate(ground_truth)
+    acc = metrics.accuracy_score(labels, pred)
+    auc = metrics.roc_auc_score(labels, probas)
+    f1  = metrics.f1_score(labels, pred)
 
-        return p_score, n_score, probas_pred, ground_truth
+    p, r, _ = metrics.precision_recall_curve(labels, probas)
+    auprc = metrics.auc(r, p)
 
-
-def do_compute_metrics(probas_pred, target):
-
-    pred = (probas_pred >= 0.5).astype(int)
-
-
-    acc = metrics.accuracy_score(target, pred)
-    auc_roc = metrics.roc_auc_score(target, probas_pred)
-    f1_score = metrics.f1_score(target, pred)
-
-    p, r, t = metrics.precision_recall_curve(target, probas_pred)
-    auc_prc = metrics.auc(r, p)
-
-    return acc, auc_roc, auc_prc
+    return acc, auc, auprc, f1
 
 
-def train(model, train_data_loader, val_data_loader, loss_fn,  optimizer, n_epochs, device, scheduler=None):
-    print('Starting training at', datetime.today())
-    for i in range(1, n_epochs+1):
+def do_compute(batch):
+    pos_tri, neg_tri = batch
+
+    pos_tri = [t.to(device) for t in pos_tri]
+    neg_tri = [t.to(device) for t in neg_tri]
+
+    p_score = model(pos_tri)
+    n_score = model(neg_tri)
+
+    probas = torch.cat([
+        torch.sigmoid(p_score),
+        torch.sigmoid(n_score)
+    ]).detach().cpu().numpy()
+
+    labels = np.concatenate([
+        np.ones(len(p_score)),
+        np.zeros(len(n_score))
+    ])
+
+    return p_score, n_score, probas, labels
+
+# train state
+best_auc = 0
+counter = 0
+
+def train():
+    global best_auc, counter
+
+    print("Start training:", datetime.now())
+
+    for epoch in range(1, args.n_epochs + 1):
         start = time.time()
-        train_loss = 0
-        train_loss_pos = 0
-        train_loss_neg = 0
-        val_loss = 0
-        val_loss_pos = 0
-        val_loss_neg = 0
-        train_probas_pred = []
-        train_ground_truth = []
-        val_probas_pred = []
-        val_ground_truth = []
+        model.train()
 
-        for batch in train_data_loader:
-            model.train()
-            p_score, n_score, probas_pred, ground_truth = do_compute(batch, device)
-            train_probas_pred.append(probas_pred)
-            train_ground_truth.append(ground_truth)
-            loss, loss_p, loss_n = loss_fn(p_score, n_score)
-            
+        train_loss = 0
+        all_probas, all_labels = [], []
+
+        for batch in train_loader:
+            p_score, n_score, probas, labels = do_compute(batch)
+
+            loss = loss_fn(p_score, n_score)
+
             optimizer.zero_grad()
             loss.backward()
+
+      
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+
             optimizer.step()
 
-            train_loss += loss.item() * len(p_score)
-        train_loss /= len(train_data)
+            train_loss += loss.item()
+            all_probas.append(probas)
+            all_labels.append(labels)
+
+        train_loss /= len(train_loader)
+
+        train_metrics = compute_metrics(
+            np.concatenate(all_probas),
+            np.concatenate(all_labels)
+        )
+
+        # ===== VALIDATION =====
+        model.eval()
+        val_loss = 0
+        all_probas, all_labels = [], []
 
         with torch.no_grad():
-            train_probas_pred = np.concatenate(train_probas_pred)
-            train_ground_truth = np.concatenate(train_ground_truth)
+            for batch in val_loader:
+                p_score, n_score, probas, labels = do_compute(batch)
+                loss = loss_fn(p_score, n_score)
 
-            train_acc, train_auc_roc, train_auc_prc = do_compute_metrics(train_probas_pred, train_ground_truth)
+                val_loss += loss.item()
+                all_probas.append(probas)
+                all_labels.append(labels)
 
-            for batch in val_data_loader:
-                model.eval()
-                p_score, n_score, probas_pred, ground_truth = do_compute(batch, device)
-                val_probas_pred.append(probas_pred)
-                val_ground_truth.append(ground_truth)
-                loss, loss_p, loss_n = loss_fn(p_score, n_score)
-                val_loss += loss.item() * len(p_score)            
+        val_loss /= len(val_loader)
 
-            val_loss /= len(val_data)
-            val_probas_pred = np.concatenate(val_probas_pred)
-            val_ground_truth = np.concatenate(val_ground_truth)
-            val_acc, val_auc_roc, val_auc_prc = do_compute_metrics(val_probas_pred, val_ground_truth)
-               
-        if scheduler:
-            # print('scheduling')
-            scheduler.step()
+        val_metrics = compute_metrics(
+            np.concatenate(all_probas),
+            np.concatenate(all_labels)
+        )
+
+        val_auc = val_metrics[1]
+
+        # save best model
+        if val_auc > best_auc:
+            best_auc = val_auc
+            counter = 0
+
+            torch.save({
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "epoch": epoch,
+                "auc": val_auc
+            }, "/content/best_model.pth")
+
+            print("Save best model!")
+        else:
+            counter += 1
+
+        #   early stopping if epochs=10 without improvement
+        if counter >= args.patience:
+            print("Early stopping!")
+            break
+
+        scheduler.step()
+
+        print(f"\nEpoch {epoch} | Time {time.time()-start:.2f}s")
+        print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+        print(f"Train AUC: {train_metrics[1]:.4f} | Val AUC: {val_metrics[1]:.4f}")
+        print(f"Train AUPR: {train_metrics[2]:.4f} | Val AUPR: {val_metrics[2]:.4f}")
+        print("-"*50)
 
 
-        print(f'Epoch: {i} ({time.time() - start:.4f}s), train_loss: {train_loss:.4f}, val_loss: {val_loss:.4f},'
-        f' train_acc: {train_acc:.4f}, val_acc:{val_acc:.4f}')
-        print(f'\t\ttrain_roc: {train_auc_roc:.4f}, val_roc: {val_auc_roc:.4f}, train_auprc: {train_auc_prc:.4f}, val_auprc: {val_auc_prc:.4f}')
+def test():
+    checkpoint = torch.load("/content/best_model.pth")
 
+    model.load_state_dict(checkpoint["model"])
+    print(f"Loaded best model (Epoch {checkpoint['epoch']}, AUC={checkpoint['auc']:.4f})")
 
-model = models.SSI_DDI(n_atom_feats, n_atom_hid, kge_dim, rel_total, heads_out_feat_params=[32, 32, 32, 32], blocks_params=[2, 2, 2, 2])
-loss = custom_loss.SigmoidLoss()
-optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-scheduler = optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 0.96 ** (epoch))
-# print(model)
-model.to(device=device)
+    model.eval()
 
-# if __name__ == '__main__':
-train(model, train_data_loader, val_data_loader, loss, optimizer, n_epochs, device, scheduler)
+    all_probas, all_labels = [], []
 
+    with torch.no_grad():
+        for batch in test_loader:
+            _, _, probas, labels = do_compute(batch)
+            all_probas.append(probas)
+            all_labels.append(labels)
 
+    probas = np.concatenate(all_probas)
+    labels = np.concatenate(all_labels)
+
+    acc, auc, auprc, f1 = compute_metrics(probas, labels)
+
+    print("\n===== TEST RESULTS =====")
+    print(f"ACC   : {acc:.4f}")
+    print(f"AUC   : {auc:.4f}")
+    print(f"AUPRC : {auprc:.4f}")
+    print(f"F1    : {f1:.4f}")
+    
+    df = pd.DataFrame({
+        "label": labels,
+        "prob": probas
+    })
+
+    df.to_csv("/content/drive/MyDrive/data_clean/test_predictions.csv", index=False)
+
+    # save metrics
+    metrics_df = pd.DataFrame([{
+        "ACC": acc,
+        "AUC": auc,
+        "AUPRC": auprc,
+        "F1": f1
+    }])
+
+    metrics_df.to_csv("/content/drive/MyDrive/data_clean/test_metrics.csv", index=False)
+
+    print("Saved: test_predictions.csv & test_metrics.csv")
+train()
+test()
