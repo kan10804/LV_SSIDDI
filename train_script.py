@@ -40,9 +40,9 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print("Device:", device)
 
 # Load data
-train_df = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_training.csv')
-val_df   = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_validation.csv')
-test_df  = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_test.csv')
+train_df = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/twoside_ddi_training.csv')
+val_df   = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/twoside_ddi_validation.csv')
+test_df  = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/twoside_ddi_test.csv')
 
 train_tup = list(zip(train_df.d1, train_df.d2, train_df.type))
 val_tup   = list(zip(val_df.d1, val_df.d2, val_df.type))
@@ -257,7 +257,7 @@ def test():
         "prob": probas
     })
 
-    df.to_csv("/content/drive/MyDrive/data_clean/test_predictions.csv", index=False)
+    df.to_csv("/content/drive/MyDrive/data_clean/twosides/test_predictions.csv", index=False)
 
     # save metrics
     metrics_df = pd.DataFrame([{
@@ -267,7 +267,7 @@ def test():
         "F1": f1
     }])
 
-    metrics_df.to_csv("/content/drive/MyDrive/data_clean/test_metrics.csv", index=False)
+    metrics_df.to_csv("/content/drive/MyDrive/data_clean/twosides/test_metrics.csv", index=False)
 
     print("Saved: test_predictions.csv & test_metrics.csv")
 train()
