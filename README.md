@@ -1,14 +1,14 @@
-# SSI-DDI
-Source code for ["SSI–DDI: substructure–substructure interactions for drug–drug interaction prediction"]( https://doi.org/10.1093/bib/bbab133) 
-   
-![Overview of SSI-DDI framework](Framework.png)  
+Phan Hoàng Khang 
+B2205943
+Giới thiệu:
+Dự án này tập trung vào bài toán dự đoán tương tác thuốc – thuốc (DDI) bằng các mô hình học sâu trên dữ liệu đồ thị. Mô hình đề xuất kết hợp Graph Isomorphism Network (GIN) và Multi-Co-Attention nhằm khai thác hiệu quả đặc trưng cấu trúc phân tử và mối quan hệ tương tác giữa các cặp thuốc.
 
- ## Implementation setup
-The versions are optional, we expect the code to work with latest versions as well.
-* Python == 3.7
-* [PyTorch](https://pytorch.org/) == 1.6
-* [PyTorch Geometry](https://pytorch-geometric.readthedocs.io/) == 1.6
-* [rdkit](https://www.rdkit.org/) == 2020.09.2
-
-## Usage
-    python train_script.py <parameters>
+Sử dụng hai tập dữ liệu:
+   DrugBank: dữ liệu có cấu trúc rõ ràng, dựa trên cơ chế sinh học
+   TWOSIDES: dữ liệu thực tế, nhiều nhiễu và phức tạp
+   Dữ liệu được tiền xử lý và áp dụng negative sampling để giảm mất cân bằng.
+Phương pháp
+   Biểu diễn mỗi phân tử dưới dạng đồ thị
+   Sử dụng GIN để học đặc trưng cấu trúc
+   Áp dụng Multi-Co-Attention để mô hình hóa tương tác giữa hai thuốc
+   Kết hợp đặc trưng để dự đoán tương tác
