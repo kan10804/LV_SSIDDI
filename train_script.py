@@ -12,7 +12,7 @@ from sklearn import metrics
 import models
 from data_preprocessing import DrugDataset, DrugDataLoader, TOTAL_ATOM_FEATS
 
-# ================= SEED =================
+# set random seeds for reproducibility
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
@@ -21,7 +21,7 @@ def set_seed(seed=42):
 
 set_seed(42)
 
-# ================= PARAM =================
+# hyperparameters and data loading
 class Args:
     n_atom_feats = TOTAL_ATOM_FEATS
     n_atom_hid = 128
@@ -39,7 +39,7 @@ args = Args()
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print("Device:", device)
 
-# Load data
+# load data and create dataloaders
 train_df = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_training.csv')
 val_df   = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_validation.csv')
 test_df  = pd.read_csv('/content/drive/MyDrive/data_clean/drugbank/ddi_test.csv')
@@ -58,7 +58,7 @@ test_loader  = DrugDataLoader(test_data, batch_size=args.batch_size * 2)
 
 print(f"Train: {len(train_data)} | Val: {len(val_data)} | Test: {len(test_data)}")
 
-# model and optimizer
+# model, optimizer, scheduler, loss function
 model = models.SSI_DDI(
     args.n_atom_feats,
     args.n_atom_hid,
@@ -79,7 +79,7 @@ scheduler = optim.lr_scheduler.LambdaLR(
     lambda epoch: 0.96 ** epoch
 )
 
-# balance
+# Focal Loss for imbalanced data
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2.0, alpha=0.3):
         super().__init__()
@@ -97,7 +97,7 @@ class FocalLoss(nn.Module):
 
 loss_fn = FocalLoss()
 
-# ================= UTIL =================
+# metrics computation
 def compute_metrics(probas, labels):
     pred = (probas >= 0.5).astype(int)
 
@@ -132,7 +132,7 @@ def do_compute(batch):
 
     return p_score, n_score, probas, labels
 
-# train state
+# training loop with early stopping based on validation AUC
 best_auc = 0
 counter = 0
 
@@ -172,7 +172,7 @@ def train():
             np.concatenate(all_labels)
         )
 
-        # ===== VALIDATION =====
+        # validation
         model.eval()
         val_loss = 0
         all_probas, all_labels = [], []
