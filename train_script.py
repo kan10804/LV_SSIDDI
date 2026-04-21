@@ -1,16 +1,18 @@
+# ================= IMPORT =================
 import time
 import random
 import numpy as np
 import pandas as pd
-from datetime import datetime
 
 import torch
 from torch import optim
 import torch.nn as nn
 from sklearn import metrics
+from sklearn.preprocessing import LabelEncoder
 
 import models
 from data_preprocessing import DrugDataset, DrugDataLoader, TOTAL_ATOM_FEATS
+
 
 # ================= SEED =================
 def set_seed(seed=42):
@@ -21,11 +23,32 @@ def set_seed(seed=42):
 
 set_seed(42)
 
+
+# ================= TIME START =================
+start_time_total = time.time()
+
+
+# ================= LOAD DATA =================
+train_df = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/ddi_training.csv')
+val_df   = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/ddi_validation.csv')
+test_df  = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/ddi_test.csv')
+
+
+# ================= ENCODE RELATION =================
+le = LabelEncoder()
+train_df["type"] = le.fit_transform(train_df["type"])
+val_df["type"]   = le.transform(val_df["type"])
+test_df["type"]  = le.transform(test_df["type"])
+
+rel_total = train_df["type"].nunique()
+print("Total relations:", rel_total)
+
+
 # ================= PARAM =================
 class Args:
     n_atom_feats = TOTAL_ATOM_FEATS
     n_atom_hid = 128
-    rel_total = 86
+    rel_total = rel_total
     lr = 3e-4
     n_epochs = 100
     kge_dim = 64
@@ -39,11 +62,8 @@ args = Args()
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print("Device:", device)
 
-# Load data
-train_df = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/ddi_training.csv')
-val_df   = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/ddi_validation.csv')
-test_df  = pd.read_csv('/content/drive/MyDrive/data_clean/twosides/ddi_test.csv')
 
+# ================= DATASET =================
 train_tup = list(zip(train_df.d1, train_df.d2, train_df.type))
 val_tup   = list(zip(val_df.d1, val_df.d2, val_df.type))
 test_tup  = list(zip(test_df.d1, test_df.d2, test_df.type))
@@ -58,7 +78,8 @@ test_loader  = DrugDataLoader(test_data, batch_size=args.batch_size * 2)
 
 print(f"Train: {len(train_data)} | Val: {len(val_data)} | Test: {len(test_data)}")
 
-# model and optimizer
+
+# ================= MODEL =================
 model = models.SSI_DDI(
     args.n_atom_feats,
     args.n_atom_hid,
@@ -79,25 +100,36 @@ scheduler = optim.lr_scheduler.LambdaLR(
     lambda epoch: 0.96 ** epoch
 )
 
-# balance
-class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, alpha=0.3):
+# loss 
+import torch.nn.functional as F
+
+class KGELoss(nn.Module):
+    def __init__(self, adv_temp=1.0):
         super().__init__()
-        self.gamma = gamma
-        self.alpha = alpha
+        self.adv_temp = adv_temp
 
     def forward(self, p_score, n_score):
-        p_prob = torch.sigmoid(p_score)
-        n_prob = torch.sigmoid(n_score)
+        # reshape n_score → (batch_size, neg_samples)
+        n_score = n_score.view(p_score.shape[0], -1)
 
-        p_loss = -self.alpha * (1 - p_prob) ** self.gamma * torch.log(p_prob + 1e-8)
-        n_loss = -(1 - self.alpha) * (n_prob ** self.gamma) * torch.log(1 - n_prob + 1e-8)
+        # ===== Self-adversarial weighting =====
+        weight = torch.softmax(n_score * self.adv_temp, dim=1).detach()
 
-        return p_loss.mean() + n_loss.mean()
+        # ===== Positive loss =====
+        pos_loss = F.softplus(-p_score).mean()
 
-loss_fn = FocalLoss()
+        # ===== Negative loss =====
+        neg_loss = F.softplus(n_score)
+        neg_loss = (weight * neg_loss).sum(dim=1).mean()
 
-# ================= UTIL =================
+        return pos_loss + neg_loss
+
+
+# 🔥 KHỞI TẠO LOSS (QUAN TRỌNG)
+loss_fn = KGELoss(adv_temp=1.0).to(device)
+
+
+# ================= METRICS =================
 def compute_metrics(probas, labels):
     pred = (probas >= 0.5).astype(int)
 
@@ -132,19 +164,18 @@ def do_compute(batch):
 
     return p_score, n_score, probas, labels
 
-# train state
+
+# ================= TRAIN =================
 best_auc = 0
 counter = 0
 
 def train():
     global best_auc, counter
 
-    print("Start training:", datetime.now())
-
     for epoch in range(1, args.n_epochs + 1):
-        start = time.time()
-        model.train()
+        epoch_start = time.time()
 
+        model.train()
         train_loss = 0
         all_probas, all_labels = [], []
 
@@ -155,10 +186,7 @@ def train():
 
             optimizer.zero_grad()
             loss.backward()
-
-      
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-
             optimizer.step()
 
             train_loss += loss.item()
@@ -188,22 +216,19 @@ def train():
 
         val_loss /= len(val_loader)
 
-        val_metrics = compute_metrics(
-            np.concatenate(all_probas),
-            np.concatenate(all_labels)
-        )
+        val_probas = np.concatenate(all_probas)
+        val_labels = np.concatenate(all_labels)
 
+        val_metrics = compute_metrics(val_probas, val_labels)
         val_auc = val_metrics[1]
 
-        # save best model
+        # ===== SAVE BEST =====
         if val_auc > best_auc:
             best_auc = val_auc
             counter = 0
 
             torch.save({
                 "model": model.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "epoch": epoch,
                 "auc": val_auc
             }, "/content/best_model.pth")
 
@@ -211,25 +236,28 @@ def train():
         else:
             counter += 1
 
-        #   early stopping if epochs=10 without improvement
         if counter >= args.patience:
             print("Early stopping!")
             break
 
         scheduler.step()
 
-        print(f"\nEpoch {epoch} | Time {time.time()-start:.2f}s")
-        print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+        epoch_time = time.time() - epoch_start
+
+        print(f"Epoch {epoch}")
         print(f"Train AUC: {train_metrics[1]:.4f} | Val AUC: {val_metrics[1]:.4f}")
-        print(f"Train AUPR: {train_metrics[2]:.4f} | Val AUPR: {val_metrics[2]:.4f}")
-        print("-"*50)
+        print(f"Time: {epoch_time:.2f} sec")
+
+        with open("/content/time_log.txt", "a") as f:
+            f.write(f"Epoch {epoch}: {epoch_time:.2f} sec\n")
 
 
+# ================= TEST =================
 def test():
-    checkpoint = torch.load("/content/best_model.pth")
+    start_test = time.time()
 
+    checkpoint = torch.load("/content/best_model.pth")
     model.load_state_dict(checkpoint["model"])
-    print(f"Loaded best model (Epoch {checkpoint['epoch']}, AUC={checkpoint['auc']:.4f})")
 
     model.eval()
 
@@ -244,31 +272,38 @@ def test():
     probas = np.concatenate(all_probas)
     labels = np.concatenate(all_labels)
 
-    acc, auc, auprc, f1 = compute_metrics(probas, labels)
+    pred = (probas >= 0.5).astype(int)
 
-    print("\n===== TEST RESULTS =====")
-    print(f"ACC   : {acc:.4f}")
-    print(f"AUC   : {auc:.4f}")
-    print(f"AUPRC : {auprc:.4f}")
-    print(f"F1    : {f1:.4f}")
-    
-    df = pd.DataFrame({
+    acc = metrics.accuracy_score(labels, pred)
+    auc = metrics.roc_auc_score(labels, probas)
+    f1  = metrics.f1_score(labels, pred)
+
+    p, r, _ = metrics.precision_recall_curve(labels, probas)
+    auprc = metrics.auc(r, p)
+
+    print("\n===== TEST =====")
+    print(acc, auc, auprc, f1)
+
+    pd.DataFrame({
         "label": labels,
-        "prob": probas
-    })
+        "prob": probas,
+        "pred": pred
+    }).to_csv("/content/drive/MyDrive/data_clean/twosides/test_predictions.csv", index=False)
 
-    df.to_csv("/content/drive/MyDrive/data_clean/twosides/test_predictions.csv", index=False)
-
-    # save metrics
-    metrics_df = pd.DataFrame([{
+    pd.DataFrame([{
         "ACC": acc,
         "AUC": auc,
         "AUPRC": auprc,
         "F1": f1
-    }])
+    }]).to_csv("/content/drive/MyDrive/data_clean/twosides/test_metrics.csv", index=False)
 
-    metrics_df.to_csv("/content/drive/MyDrive/data_clean/twosides/test_metrics.csv", index=False)
+    end_test = time.time()
+    print(f"Test time: {end_test - start_test:.2f} sec")
 
-    print("Saved: test_predictions.csv & test_metrics.csv")
+
+# ================= RUN =================
 train()
 test()
+
+end_time_total = time.time()
+print(f"\nTotal time: {(end_time_total - start_time_total)/60:.2f} minutes")
